@@ -1,0 +1,79 @@
+[tool.poetry]
+name = "pyrate-limiter"
+version = "3.1.0"
+description = "Python Rate-Limiter using Leaky-Bucket Algorithm"
+authors = ["vutr <me@vutr.io>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/vutran1710/PyrateLimiter"
+repository = "https://github.com/vutran1710/PyrateLimiter"
+documentation = "https://pyrate-limiter.readthedocs.io"
+keywords = ["rate", "rate-limiter", "rate_limiter", "ratelimiter", "leaky-bucket", "ratelimit", "ratelimiting"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+include = [
+    { path = "LICENSE", format = "sdist" },
+    { path = "CHANGELOG.md", format = "sdist" },
+    { path = "docs", format = "sdist" },
+    { path = "tests", format = "sdist" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+
+# Optional backend dependencies
+filelock = {optional=true, version=">=3.0"}
+redis = {optional=true, version="^4.0.0"}
+
+# Documentation dependencies needed for Readthedocs builds
+furo = {optional=true, version="^2022.3.4"}
+myst-parser = {optional=true, version=">=0.17"}
+sphinx = {optional=true, version="^4.3.0"}
+sphinx-autodoc-typehints = {optional=true, version="^1.17"}
+sphinx-copybutton = {optional=true, version=">=0.5"}
+sphinxcontrib-apidoc = {optional=true, version="^0.3"}
+
+[tool.poetry.extras]
+all = ["filelock", "redis"]
+docs = ["furo", "myst-parser", "sphinx", "sphinx-autodoc-typehints",
+        "sphinx-copybutton", "sphinxcontrib-apidoc"]
+
+[tool.poetry.dev-dependencies]
+flake8_polyfill = "^1.0.2"
+nox = "^2022.1.7"
+nox-poetry = ">=0.8"
+pre-commit = "^2.17.0"
+pytest = "^6.2"
+pytest-asyncio = "^0.12"
+pytest-xdist = "^2.5.0"
+pyYAML = "^6.0.1"
+schedule = "^1.1.0"
+pytest-cov = "^4.1.0"
+coverage = "6"
+
+[tool.black]
+line-length = 120
+
+[tool.coverage.run]
+branch = true
+source = ['pyrate_limiter']
+
+[tool.coverage.report]
+exclude_lines = [
+    "except ImportError:",  # Used for missing optional dependencies
+]
+
+[tool.coverage.xml]
+output = 'test-reports/coverage.xml'
+
+[tool.ipdb]
+context=7
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
