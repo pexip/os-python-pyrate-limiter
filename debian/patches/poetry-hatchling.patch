@@ -1,0 +1,21 @@
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,8 +1,8 @@
+-[tool.poetry]
++[project]
+ name = "pyrate-limiter"
+ version = "3.1.0"
+ description = "Python Rate-Limiter using Leaky-Bucket Algorithm"
+-authors = ["vutr <me@vutr.io>"]
++authors = [{ name = "vutr", email = "me@vutr.io" }]
+ license = "MIT"
+ readme = "README.md"
+ homepage = "https://github.com/vutran1710/PyrateLimiter"
+@@ -75,5 +75,5 @@
+ context=7
+ 
+ [build-system]
+-requires = ["poetry-core"]
+-build-backend = "poetry.core.masonry.api"
++requires = ["hatchling"]
++build-backend = "hatchling.build"

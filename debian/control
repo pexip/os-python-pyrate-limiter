@@ -1,0 +1,24 @@
+Source: python-pyrate-limiter
+Section: python
+Priority: optional
+Maintainer: Pexip AS <packaging@pexip.com>
+Build-Depends: debhelper-compat (= 13),
+ dh-python,
+ pybuild-plugin-pyproject,
+ python3-setuptools,
+ python3-all,
+ python3-hatchling,
+ python3-pytest <!nocheck>,
+ python3-pytest-asyncio <!nocheck>,
+ python3-pytest-xdist <!nocheck>,
+ python3-yaml <!nocheck>,
+Standards-Version: 4.5.1
+Rules-Requires-Root: no
+Homepage: https://github.com/vutran1710/PyrateLimiter
+Vcs-Browser: https://github.com/vutran1710/PyrateLimiter
+Vcs-Git: https://github.com/vutran1710/PyrateLimiter.git
+
+Package: python3-pyrate-limiter
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}
+Description: Request rate limiter using Leaky-bucket algorithm

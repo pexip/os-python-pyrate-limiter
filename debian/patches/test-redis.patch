@@ -1,0 +1,13 @@
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -114,8 +114,8 @@
+ @pytest.fixture(
+     params=[
+         create_in_memory_bucket,
+-        create_redis_bucket,
+-        create_async_redis_bucket,
++        # create_redis_bucket,
++        # create_async_redis_bucket,
+         create_sqlite_bucket,
+     ]
+ )
