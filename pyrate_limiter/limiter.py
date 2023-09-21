@@ -1,336 +1,155 @@
-"""Limiter class implementation
-"""
-import asyncio
-import logging
-from functools import wraps
-from inspect import isawaitable
-from threading import RLock
-from time import sleep
+from time import monotonic
 from typing import Any
-from typing import Awaitable
 from typing import Callable
-from typing import List
-from typing import Optional
-from typing import Tuple
+from typing import Dict
+from typing import Type
 from typing import Union
 
-from .abstracts import AbstractBucket
-from .abstracts import AbstractClock
-from .abstracts import BucketFactory
-from .abstracts import Duration
-from .abstracts import Rate
-from .abstracts import RateItem
-from .buckets import InMemoryBucket
-from .clocks import TimeClock
+from .bucket import AbstractBucket
+from .bucket import MemoryQueueBucket
 from .exceptions import BucketFullException
-from .exceptions import LimiterDelayException
-
-logger = logging.getLogger("pyrate_limiter")
-
-ItemMapping = Callable[[Any], Tuple[str, int]]
-DecoratorWrapper = Callable[[Callable[[Any], Any]], Callable[[Any], Any]]
-
-
-class SingleBucketFactory(BucketFactory):
-    """Single-bucket factory for quick use with Limiter"""
-
-    bucket: AbstractBucket
-    clock: AbstractClock
-
-    def __init__(self, bucket: AbstractBucket, clock: AbstractClock):
-        self.clock = clock
-        self.bucket = bucket
-        self.schedule_leak(bucket, clock)
-
-    def wrap_item(self, name: str, weight: int = 1):
-        now = self.clock.now()
-
-        async def wrap_async():
-            return RateItem(name, await now, weight=weight)
-
-        def wrap_sycn():
-            return RateItem(name, now, weight=weight)
-
-        return wrap_async() if isawaitable(now) else wrap_sycn()
-
-    def get(self, _: RateItem) -> AbstractBucket:
-        return self.bucket
+from .exceptions import InvalidParams
+from .limit_context_decorator import LimitContextDecorator
+from .request_rate import RequestRate
 
 
 class Limiter:
-    """This class responsibility is to sum up all underlying logic
-    and make working with async/sync functions easily
-    """
+    """Main rate-limiter class
 
-    bucket_factory: BucketFactory
-    raise_when_fail: bool
-    max_delay: Optional[int] = None
-    lock: RLock
+    Args:
+        rates: Request rate definitions
+        bucket_class: Bucket backend to use; may be any subclass of :py:class:`.AbstractBucket`.
+            See :py:mod`pyrate_limiter.bucket` for available bucket classes.
+        bucket_kwargs: Extra keyword arguments to pass to the bucket class constructor.
+        time_function: Time function that returns the current time as a float, in seconds
+    """
 
     def __init__(
         self,
-        argument: Union[BucketFactory, AbstractBucket, Rate, List[Rate]],
-        clock: AbstractClock = TimeClock(),
-        raise_when_fail: bool = True,
-        max_delay: Optional[Union[int, Duration]] = None,
+        *rates: RequestRate,
+        bucket_class: Type[AbstractBucket] = MemoryQueueBucket,
+        bucket_kwargs: Dict[str, Any] = None,
+        time_function: Callable[[], float] = None,
     ):
-        """Init Limiter using either a single bucket / multiple-bucket factory
-        / single rate / rate list
+        self._validate_rate_list(rates)
+
+        self._rates = rates
+        self._bkclass = bucket_class
+        self._bucket_args = bucket_kwargs or {}
+        self._validate_bucket()
+
+        self.bucket_group: Dict[str, AbstractBucket] = {}
+        self.time_function = monotonic
+        if time_function is not None:
+            self.time_function = time_function
+        # Call for time_function to make an anchor if required.
+        self.time_function()
+
+    def _validate_rate_list(self, rates):  # pylint: disable=no-self-use
+        """Raise exception if rates are incorrectly ordered."""
+        if not rates:
+            raise InvalidParams("Rate(s) must be provided")
+
+        for idx, rate in enumerate(rates[1:]):
+            prev_rate = rates[idx]
+            invalid = rate.limit <= prev_rate.limit or rate.interval <= prev_rate.interval
+            if invalid:
+                msg = f"{prev_rate} cannot come before {rate}"
+                raise InvalidParams(msg)
+
+    def _validate_bucket(self):
+        """Try initialize a bucket to check if ok"""
+        bucket = self._bkclass(maxsize=self._rates[-1].limit, identity="_", **self._bucket_args)
+        del bucket
+
+    def _init_buckets(self, identities) -> None:
+        """Initialize a bucket for each identity, if needed.
+        The bucket's maxsize equals the max limit of request-rates.
         """
-        self.bucket_factory = self._init_bucket_factory(argument, clock=clock)
-        self.raise_when_fail = raise_when_fail
-
-        if max_delay is not None:
-            if isinstance(max_delay, Duration):
-                max_delay = int(max_delay)
-
-            assert max_delay >= 0, "Max-delay must not be negative"
-
-        self.max_delay = max_delay
-        self.lock = RLock()
-
-    def _init_bucket_factory(
-        self,
-        argument: Union[BucketFactory, AbstractBucket, Rate, List[Rate]],
-        clock: AbstractClock,
-    ) -> BucketFactory:
-        if isinstance(argument, Rate):
-            argument = [argument]
-
-        if isinstance(argument, list):
-            assert len(argument) > 0, "Rates must not be empty"
-            assert isinstance(argument[0], Rate), "Not valid rates list"
-            rates = argument
-            logger.info("Initializing default bucket(InMemoryBucket) with rates: %s", rates)
-            argument = InMemoryBucket(rates)
-
-        if isinstance(argument, AbstractBucket):
-            argument = SingleBucketFactory(argument, clock)
-
-        assert isinstance(argument, BucketFactory), "Not a valid bucket/bucket-factory"
-        return argument
-
-    def _raise_bucket_full_if_necessary(
-        self,
-        bucket: AbstractBucket,
-        item: RateItem,
-    ):
-        if self.raise_when_fail:
-            assert bucket.failing_rate is not None  # NOTE: silence mypy
-            raise BucketFullException(item, bucket.failing_rate)
-
-    def _raise_delay_exception_if_necessary(
-        self,
-        bucket: AbstractBucket,
-        item: RateItem,
-        delay: int,
-    ):
-        if self.raise_when_fail:
-            assert bucket.failing_rate is not None  # NOTE: silence mypy
-            assert isinstance(self.max_delay, int)
-            raise LimiterDelayException(
-                item,
-                bucket.failing_rate,
-                delay,
-                self.max_delay,
-            )
-
-    def delay_or_raise(
-        self,
-        bucket: AbstractBucket,
-        item: RateItem,
-    ) -> Union[bool, Awaitable[bool]]:
-        """On `try_acquire` failed, handle delay or raise error immediately"""
-        assert bucket.failing_rate is not None
-
-        if self.max_delay is None:
-            self._raise_bucket_full_if_necessary(bucket, item)
-            return False
-
-        delay = bucket.waiting(item)
-
-        def _handle_reacquire(re_acquire: bool) -> bool:
-            if not re_acquire:
-                logger.error(
-                    """
-                Re-acquiring with delay expected to be successful,
-                if it failed then either clock or bucket is probably unstable
-                """
+        maxsize = self._rates[-1].limit
+        for item_id in sorted(identities):
+            if not self.bucket_group.get(item_id):
+                self.bucket_group[item_id] = self._bkclass(
+                    maxsize=maxsize,
+                    identity=item_id,
+                    **self._bucket_args,
                 )
-                self._raise_bucket_full_if_necessary(bucket, item)
+            self.bucket_group[item_id].lock_acquire()
 
-            return re_acquire
+    def _release_buckets(self, identities) -> None:
+        """Release locks after bucket transactions, if applicable"""
+        for item_id in sorted(identities):
+            self.bucket_group[item_id].lock_release()
 
-        if isawaitable(delay):
+    def try_acquire(self, *identities: str) -> None:
+        """Attempt to acquire an item, or raise an error if a rate limit has been exceeded.
 
-            async def _handle_async():
-                nonlocal delay
-                delay = await delay
-                assert isinstance(delay, int), "Delay not integer"
-                delay += 50
+        Args:
+            identities: One or more identities to acquire. Typically this is the name of a service
+                or resource that is being rate-limited.
 
-                if delay > self.max_delay:
-                    logger.error(
-                        "Required delay too large: actual=%s, expected=%s",
-                        delay,
-                        self.max_delay,
-                    )
-                    self._raise_delay_exception_if_necessary(bucket, item, delay)
-                    return False
+        Raises:
+            :py:exc:`BucketFullException`: If the bucket is full and the item cannot be acquired
+        """
+        self._init_buckets(identities)
+        now = round(self.time_function(), 3)
 
-                await asyncio.sleep(delay / 1000)
-                item.timestamp += delay
-                re_acquire = bucket.put(item)
+        for rate in self._rates:
+            for item_id in identities:
+                bucket = self.bucket_group[item_id]
+                volume = bucket.size()
 
-                if isawaitable(re_acquire):
-                    re_acquire = await re_acquire
+                if volume < rate.limit:
+                    continue
 
-                return _handle_reacquire(re_acquire)
+                # Determine rate's starting point, and check requests made during its time window
+                item_count, remaining_time = bucket.inspect_expired_items(now - rate.interval)
+                if item_count >= rate.limit:
+                    self._release_buckets(identities)
+                    raise BucketFullException(item_id, rate, remaining_time)
 
-            return _handle_async()
+                # Remove expired bucket items beyond the last (maximum) rate limit,
+                if rate is self._rates[-1]:
+                    bucket.get(volume - item_count)
 
-        assert isinstance(delay, int)
+        # If no buckets are full, add another item to each bucket representing the next request
+        for item_id in identities:
+            self.bucket_group[item_id].put(now)
+        self._release_buckets(identities)
 
-        if delay < 0:
-            logger.error(
-                "Cannot fit item into bucket: item=%s, rate=%s, bucket=%s",
-                item,
-                bucket.failing_rate,
-                bucket,
-            )
-            self._raise_bucket_full_if_necessary(bucket, item)
-            return False
-
-        delay += 50
-
-        if delay > self.max_delay:
-            logger.error(
-                "Required delay too large: actual=%s, expected=%s",
-                delay,
-                self.max_delay,
-            )
-            self._raise_delay_exception_if_necessary(bucket, item, delay)
-            return False
-
-        sleep(delay / 1000)
-        item.timestamp += delay
-        re_acquire = bucket.put(item)
-        # NOTE: if delay is not Awaitable, then `bucket.put` is not Awaitable
-        assert isinstance(re_acquire, bool)
-        return _handle_reacquire(re_acquire)
-
-    def handle_bucket_put(
+    def ratelimit(
         self,
-        bucket: AbstractBucket,
-        item: RateItem,
-    ) -> Union[bool, Awaitable[bool]]:
-        """Putting item into bucket"""
+        *identities: str,
+        delay: bool = False,
+        max_delay: Union[int, float] = None,
+    ):
+        """A decorator and contextmanager that applies rate-limiting, with async support.
+        Depending on arguments, calls that exceed the rate limit will either raise an exception, or
+        sleep until space is available in the bucket.
 
-        def _handle_result(is_success: bool):
-            if not is_success:
-                return self.delay_or_raise(bucket, item)
+        Args:
+            identities: One or more identities to acquire. Typically this is the name of a service
+                or resource that is being rate-limited.
+            delay: Delay until the next request instead of raising an exception
+            max_delay: The maximum allowed delay time (in seconds); anything over this will raise
+                an exception
 
-            return True
-
-        acquire = bucket.put(item)
-
-        if isawaitable(acquire):
-
-            async def _put_async():
-                nonlocal acquire
-                acquire = await acquire
-                result = _handle_result(acquire)
-
-                while isawaitable(result):
-                    result = await result
-
-                return result
-
-            return _put_async()
-
-        return _handle_result(acquire)  # type: ignore
-
-    def try_acquire(self, name: str, weight: int = 1) -> Union[bool, Awaitable[bool]]:
-        """Try accquiring an item with name & weight
-        Return true on success, false on failure
+        Raises:
+            :py:exc:`BucketFullException`: If the rate limit is reached, and ``delay=False`` or the
+                delay exceeds ``max_delay``
         """
-        with self.lock:
-            assert weight >= 0, "item's weight must be >= 0"
+        return LimitContextDecorator(self, *identities, delay=delay, max_delay=max_delay)
 
-            if weight == 0:
-                # NOTE: if item is weightless, just let it go through
-                # NOTE: this might change in the futre
-                return True
+    def get_current_volume(self, identity) -> int:
+        """Get current bucket volume for a specific identity"""
+        bucket = self.bucket_group[identity]
+        return bucket.size()
 
-            item = self.bucket_factory.wrap_item(name, weight)
+    def flush_all(self) -> int:
+        cnt = 0
 
-            if isawaitable(item):
+        for _, bucket in self.bucket_group.items():
+            bucket.flush()
+            cnt += 1
 
-                async def _handle_async():
-                    nonlocal item
-                    item = await item
-                    bucket = self.bucket_factory.get(item)
-                    assert isinstance(bucket, AbstractBucket), f"Invalid bucket: item: {name}"
-                    result = self.handle_bucket_put(bucket, item)
-
-                    while isawaitable(result):
-                        result = await result
-
-                    return result
-
-                return _handle_async()
-
-            assert isinstance(item, RateItem)  # NOTE: this is to silence mypy warning
-            bucket = self.bucket_factory.get(item)
-            assert isinstance(bucket, AbstractBucket), f"Invalid bucket: item: {name}"
-            result = self.handle_bucket_put(bucket, item)
-
-            if isawaitable(result):
-
-                async def _handle_async_result():
-                    nonlocal result
-                    while isawaitable(result):
-                        result = await result
-
-                    return result
-
-                return _handle_async_result()
-
-            return result
-
-    def as_decorator(self) -> Callable[[ItemMapping], DecoratorWrapper]:
-        """Use limiter decorator
-        Use with both sync & async function
-        """
-
-        def with_mapping_func(mapping: ItemMapping) -> DecoratorWrapper:
-            def decorator_wrapper(func: Callable[[Any], Any]) -> Callable[[Any], Any]:
-                """Actual function warpper"""
-
-                @wraps(func)
-                def wrapper(*args, **kwargs):
-                    (name, weight) = mapping(*args, **kwargs)
-                    assert isinstance(name, str), "Mapping name is expected but not found"
-                    assert isinstance(weight, int), "Mapping weight is expected but not found"
-                    accquire_ok = self.try_acquire(name, weight)
-
-                    if not isawaitable(accquire_ok):
-                        return func(*args, **kwargs)
-
-                    async def _handle_accquire_async():
-                        nonlocal accquire_ok
-                        accquire_ok = await accquire_ok
-                        result = func(*args, **kwargs)
-
-                        if isawaitable(result):
-                            return await result
-
-                        return result
-
-                    return _handle_accquire_async()
-
-                return wrapper
-
-            return decorator_wrapper
-
-        return with_mapping_func
+        return cnt

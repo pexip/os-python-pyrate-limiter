@@ -4,23 +4,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [3.1.0] - 2023-08-28
-* Allow to pass rates directly to Limiter to use default ImMemoryBucket with Limiter
-* Allow to pass *Duration* to `max_delay` argument of Limiter
-
-## [3.0.2] - 2023-08-28
-* Critical bug fix: importing redis fail crashing apps
-
-## [3.0.0] - 2023-08-28
- Third major release with API breaking changes:
-- Drop python 3.7 (only python ^3.8)
-- Bucket must be initialized before passing to Limiter
-- Auto leaking (provided by BucketFactory)
-- Decorator API changes
-- Limiter workable with both async/sync out-of-the-box
-- Async RedisBucket built-in
-- Contextmanager not available yet
-
 ## [2.10.0] - 2023-02-26
 ### Updates
 * Add change log to sdist
