@@ -1,13 +1,24 @@
---- a/tests/conftest.py
-+++ b/tests/conftest.py
-@@ -114,8 +114,8 @@
- @pytest.fixture(
-     params=[
-         create_in_memory_bucket,
--        create_redis_bucket,
--        create_async_redis_bucket,
-+        # create_redis_bucket,
-+        # create_async_redis_bucket,
-         create_sqlite_bucket,
-     ]
- )
+--- a/tests/test_02.py
++++ b/tests/test_02.py
+@@ -2,6 +2,9 @@
+ from time import sleep
+ 
+ import pytest
++
++pytest.skip("Redis", allow_module_level=True)
++
+ from fakeredis import FakeStrictRedis
+ 
+ from pyrate_limiter import BucketFullException
+--- a/tests/test_with_django.py
++++ b/tests/test_with_django.py
+@@ -1,6 +1,9 @@
+ """Testing with real redis
+ """
+ from time import sleep
++import pytest
++
++pytest.skip("Redis", allow_module_level=True)
+ 
+ import django_redis
+ from django.conf import settings
