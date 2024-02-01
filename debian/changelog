@@ -1,3 +1,9 @@
+python-pyrate-limiter (3.1.0.really.2.10.0-0+pexip24u4) pexip-bookworm; urgency=medium
+
+  * New versioning scheme
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 01 Feb 2024 16:25:16 +0000
+
 python-pyrate-limiter (3.1.0.really.2.10.0-0pexip3) pexip-bookworm; urgency=medium
 
   * Bookworm build for product distribution
