@@ -1,3 +1,5 @@
+Skip testing against redis as we do not use or ship it
+
 --- a/tests/test_02.py
 +++ b/tests/test_02.py
 @@ -2,6 +2,9 @@
